@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Messenger10</title>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <style>
+        body { font-family: monospace; background: black; color: lime; padding: 20px; }
+        #chat { border: 1px solid lime; height: 300px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+        input, button { background: black; color: lime; border: 1px solid lime; }
+    </style>
+</head>
+<body>
+    <h2>Messenger10</h2>
+    <div>Your Code: <span id="userCode">...</span></div>
+    <div id="chat"></div>
+    <input type="text" id="message" placeholder="Type your message">
+    <button onclick="sendMessage()">Send</button>
+    <div><strong>Active Users:</strong> <span id="activeUsers">None</span></div>
+
+    <script>
+        const socket = io();
+        const chatBox = document.getElementById("chat");
+        const messageInput = document.getElementById("message");
+
+        socket.emit("join");
+
+        socket.on("user_code", code => {
+            document.getElementById("userCode").textContent = code;
+        });
+
+        socket.on("chat", data => {
+            chatBox.innerHTML += data.msg + "<br>";
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+
+        socket.on("active_users", users => {
+            document.getElementById("activeUsers").textContent = users.join(", ");
+        });
+
+        function sendMessage() {
+            const msg = messageInput.value.trim();
+            if (msg) {
+                socket.emit("chat", { msg });
+                messageInput.value = "";
+            }
+        }
+
+        messageInput.addEventListener("keypress", function(e) {
+            if (e.key === "Enter") sendMessage();
+        });
+    </script>
+</body>
+</html>
