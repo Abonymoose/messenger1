@@ -1,60 +1,53 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Terminal</title>
-  <style>
-    body { background:#000; color:#ff2b2b; font-family: monospace; margin:0; }
-    #header { padding:10px; border-bottom:1px solid #ff2b2b; }
-    #active { float:right; }
-    #msgs { height:66vh; overflow-y:auto; padding:10px; white-space:pre-wrap;}
-    #form { display:flex; border-top:1px solid #ff2b2b;}
-    input{ background:#111; border:none; color:#ff2b2b; flex:1; padding:10px;}
-    button{ background:#ff2b2b; border:none; color:#000; padding:10px;}
-    #login { display:flex; padding:10px; gap:5px; background:#111; }
-    #login input { flex:1; padding:10px; background:#000; border:1px solid #ff2b2b; color:#ff2b2b; }
-  </style>
+    <title>Terminal</title>
+    <style>
+        body {
+            background: black;
+            color: red;
+            font-family: monospace;
+            padding: 20px;
+        }
+        #chat {
+            height: 400px;
+            overflow-y: scroll;
+            border: 1px solid red;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        input[type="text"] {
+            width: 100%;
+            background: black;
+            border: 1px solid red;
+            color: red;
+            padding: 5px;
+        }
+    </style>
 </head>
 <body>
-  <div id="header">TERMINAL <span id="active">Active: 0</span></div>
-  <div id="msgs"></div>
-  <div id="login">
-    <input id="user" placeholder="username"><input id="pw" placeholder="password">
-    <button id="enter">Enter</button>
-  </div>
-  <form id="form" style="display:none;">
-    <input id="msg" placeholder="Type a command or message...">
-    <button type="submit">Send</button>
-  </form>
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script>
-    const sock = io();
-    const msgs = document.getElementById("msgs"),
-          form = document.getElementById("form"),
-          login = document.getElementById("login"),
-          enter = document.getElementById("enter"),
-          user = document.getElementById("user"),
-          pw = document.getElementById("pw"),
-          msgIn = document.getElementById("msg"),
-          active = document.getElementById("active");
+    <h2>Terminal</h2>
+    <div id="chat"></div>
+    <input type="text" id="input" autocomplete="off" placeholder="Enter message..." />
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+        const input = document.getElementById("input");
+        const chat = document.getElementById("chat");
 
-    function updateActive(n){ active.textContent="Active: "+n; }
+        input.addEventListener("keydown", e => {
+            if (e.key === "Enter" && input.value.trim() !== "") {
+                socket.emit("chat", { msg: input.value });
+                input.value = "";
+            }
+        });
 
-    enter.onclick = ()=> {
-      if (!user.value) return;
-      sock.emit("set_username", {username:user.value, password:pw.value});
-      login.style.display="none"; form.style.display="flex";
-    };
-    form.onsubmit = e => {
-      e.preventDefault();
-      if (!msgIn.value) return;
-      sock.emit("chat", {msg: msgIn.value});
-      msgIn.value="";
-    };
-    sock.on("message", d=>{
-      msgs.innerHTML += d.msg + "\n";
-      msgs.scrollTop = msgs.scrollHeight;
-    });
-    sock.on("active_count", d=> updateActive(d.n));
-  </script>
+        socket.on("message", data => {
+            const div = document.createElement("div");
+            div.textContent = data.msg;
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        });
+    </script>
 </body>
 </html>
