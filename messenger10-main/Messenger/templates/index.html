@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Messenger10 Terminal</title>
+    <style>
+        body {
+            background-color: black;
+            color: lime;
+            font-family: monospace;
+            padding: 20px;
+        }
+        #terminal {
+            white-space: pre-wrap;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        input {
+            background: black;
+            color: lime;
+            border: none;
+            border-bottom: 1px solid lime;
+            width: 100%;
+            font-family: monospace;
+            font-size: 1em;
+        }
+    </style>
+</head>
+<body>
+    <h2>Messenger10 Terminal</h2>
+    <div id="terminal">Type "help" to begin.</div>
+    <input type="text" id="commandInput" autocomplete="off" autofocus placeholder="Enter command...">
+
+    <script>
+        const terminal = document.getElementById("terminal");
+        const input = document.getElementById("commandInput");
+
+        input.addEventListener("keydown", function (event) {
+            if (event.key === "Enter") {
+                const command = input.value;
+                input.value = "";
+                fetch("/terminal", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ command })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    terminal.innerText += "\n\n" + data.response;
+                    terminal.scrollTop = terminal.scrollHeight;
+                });
+            }
+        });
+    </script>
+</body>
+</html>
