@@ -1,243 +1,163 @@
-import os, random, string
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
-import eventlet
+import random, string, os
 
-# === Initialize Flask & SocketIO ===
 app = Flask(__name__)
-socketio = SocketIO(app, async_mode='eventlet')
+socketio = SocketIO(app)
 
-# === In‑memory Data Stores ===
+users = {}  # sid -> {"username": ..., "room": ..., "anon": False, "admin": False}
 rooms = {"lobby": set()}
-users = {}         # sid -> username
-user_rooms = {}    # sid -> room
-anon_users = set()
-accounts = {
-    "pm4k": {"password": "abonymoose", "admin": True, "rank": 34},
-    "ak4k": {"password": "1028", "admin": False, "rank": 1},
-}
-rankings = {u: {"roulette": 0, "killspree": 0} for u in accounts}
-challenges = {}     # (challenger_sid, challenged_sid): game_name
-game_rooms = {}     # room_id -> {type, players, data}
-muted, blocked = set(), set()
-admins = {u for u,d in accounts.items() if d["admin"]}
+challenges = {}  # (challenger_sid, target_sid): game_type
+game_rooms = {}  # room_id -> {"type": ..., "players": [...], "data": ...}
+user_ranks = {}  # username -> {"rank": int, "admin": bool, "password": str, "scores": {...}}
+muted = set()
+blocked = set()
+
+def generate_id(length=8):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-def gen_room():
-    return ''.join(random.choices(string.ascii_letters+string.digits, k=8))
-
-def display_name(sid):
-    u = users.get(sid, "Anonymous")
-    if u in admins:
-        return f"[ADMIN]{u}"
-    return f"[{accounts[u]['rank']}]"+u
-
-# === WebSocket Events ===
 @socketio.on("connect")
-def on_connect():
+def handle_connect():
     sid = request.sid
-    users[sid] = "Anonymous"
-    user_rooms[sid] = "lobby"
+    users[sid] = {"username": "Anonymous", "room": "lobby", "anon": True, "admin": False}
     rooms["lobby"].add(sid)
-    emit("message", {"msg": "System: An Anonymous joined."}, broadcast=True)
-    emit("active_count", {"n": len(users)}, broadcast=True)
+    join_room("lobby")
+    emit("message", {"msg": "System: Anonymous joined the lobby."}, broadcast=True)
 
 @socketio.on("disconnect")
-def on_disconnect():
+def handle_disconnect():
     sid = request.sid
-    u = users.get(sid, "Anonymous")
-    room = user_rooms.get(sid, "lobby")
+    user = users.get(sid, {})
+    room = user.get("room", "lobby")
     rooms.get(room, set()).discard(sid)
     users.pop(sid, None)
-    user_rooms.pop(sid, None)
-    anon_users.discard(sid)
-    emit("message", {"msg": f"System: {u} left."}, broadcast=True)
-    emit("active_count", {"n": len(users)}, broadcast=True)
+    emit("message", {"msg": f"System: {user.get('username', 'Anonymous')} disconnected."}, room=room)
 
-@socketio.on("set_username")
-def on_set_user(data):
+@socketio.on("login")
+def handle_login(data):
     sid = request.sid
-    nm, pw = data.get("username"), data.get("password")
-    if not nm or not pw:
-        emit("message", {"msg": "System: Username & password required."})
-        return
-    if nm in accounts:
-        if accounts[nm]["password"] != pw:
-            emit("message", {"msg": "System: Wrong password."}); return
+    username = data["username"]
+    password = data["password"]
+    if username in user_ranks:
+        if user_ranks[username]["password"] != password:
+            emit("message", {"msg": "System: Incorrect password."})
+            return
     else:
-        accounts[nm] = {"password": pw, "admin": False, "rank": 1}
-        rankings[nm] = {"roulette":0, "killspree":0}
-    users[sid] = nm
-    anon_users.discard(sid)
-    if accounts[nm]["admin"]:
-        admins.add(nm)
-    rooms["lobby"].add(sid)
-    emit("message", {"msg": f"System: Welcome {display_name(sid)}!"}, room=user_rooms[sid])
-    emit("active_count", {"n": len(users)}, broadcast=True)
+        user_ranks[username] = {"rank": 0, "admin": False, "password": password, "scores": {"roulette": 0, "killspree": 0}}
+    users[sid]["username"] = username
+    users[sid]["anon"] = False
+    users[sid]["admin"] = user_ranks[username]["admin"]
+    emit("message", {"msg": f"System: Logged in as {username}."})
 
 @socketio.on("chat")
-def on_chat(data):
+def handle_chat(data):
+    msg = data["msg"].strip()
     sid = request.sid
-    msg = data.get("msg","").strip()
-    room = user_rooms.get(sid, "lobby")
-    u = users.get(sid,"Anonymous")
-    is_admin = u in admins
-    def reply(t): emit("message", {"msg": t}, room=room)
+    user = users[sid]
+    username = user["username"]
+    room = user["room"]
 
     if sid in muted:
+        emit("message", {"msg": "System: You are muted."})
         return
 
-    if sid in anon_users:
-        if msg == "/anon":
-            anon_users.discard(sid)
-            users[sid] = "Anonymous"
-            reply("System: You left anonymous mode.")
-        else:
-            reply(f"Anonymous: {msg}")
+    # Command parsing
+    if msg.startswith("/"):
+        handle_command(sid, msg)
         return
 
-    if msg == "/anon":
-        users[sid] = "Anonymous"
-        anon_users.add(sid)
-        rooms["lobby"].add(sid)
-        reply("System: You joined anonymous mode.")
-        return
+    emit("message", {"msg": f"{format_name(username)}: {msg}"}, room=room)
 
-    if msg == "/help":
-        cmd = (
-            "/help\n/anon\n@user /pvc\n@user /challenge roulette|killspree\n"
-            "/pull /attack /rank"
+def format_name(username):
+    user_data = next((u for u in users.values() if u["username"] == username), None)
+    if not user_data:
+        return username
+    if user_data["anon"]:
+        return "Anonymous"
+    tag = "[ADMIN]" if user_data["admin"] else f"[{user_ranks[username]['rank']}]"
+    return f"{tag}{username}" if not user_data["admin"] else f"[ADMIN]{username}"
+
+def handle_command(sid, msg):
+    user = users[sid]
+    username = user["username"]
+    room = user["room"]
+    is_admin = user["admin"]
+
+    args = msg[1:].split()
+    cmd = args[0]
+
+    # General commands
+    if cmd == "help":
+        help_text = (
+            "Commands:\n"
+            "/help — this list\n"
+            "/anon — toggle anonymous mode\n"
+            "@username challenge roulette|killspree\n"
+            "@username pvc — private chat\n"
+            "/rank — show your rank"
         )
         if is_admin:
-            cmd += "\nAdmin: /kick @user /mute @user /block @user"                   " /rank set @user X /rank reset @user"                   " /rename @user newname /game block @user"                   " /password check @user /admin @user"
-        reply(cmd); return
+            help_text += (
+                "\n\nAdmin Commands:\n"
+                "/kick @user\n/mute @user\n/block @user\n"
+                "/rank set @user rank\n"
+                "/rank reset @user\n"
+                "/admin @user\n"
+            )
+        emit("message", {"msg": help_text}, room=sid)
 
-    if msg == "/active":
-        reply(f"System: Active users: {len(users)}")
-        return
+    elif cmd == "anon":
+        users[sid]["anon"] = not users[sid]["anon"]
+        emit("message", {"msg": f"System: {'Anonymous' if users[sid]['anon'] else username} toggled anonymity."}, broadcast=True)
 
-    if msg == "/rank":
-        if is_admin:
-            reply("System: Admins don't show rank.")
-        else:
-            r = rankings.get(u, {})
-            reply(f"System: {u} → Roulette: {r.get('roulette',0)}, Killspree: {r.get('killspree',0)}")
-        return
-
-    if is_admin and msg.startswith("/"):
-        parts = msg.split()
-        cmd, rest = parts[0], parts[1:]
-        if cmd == "/kick" and rest:
-            t = rest[0].lstrip("@")
-            tsid = next((s for s,k in users.items() if k==t),None)
-            if tsid: socketio.server.disconnect(tsid)
+    elif cmd == "rank":
+        if user["anon"]:
+            emit("message", {"msg": "System: Anonymous users have no rank."})
             return
-        if cmd == "/mute" and rest:
-            t=rest[0].lstrip("@")
-            tsid=next((s for s,k in users.items() if k==t),None)
-            if tsid: muted.add(tsid)
-            return
-        if cmd == "/block" and rest:
-            blocked.add(rest[0].lstrip("@"))
-            return
-        if cmd == "/rank" and rest[0] in ("set","reset"):
-            t=rest[1].lstrip("@"); val=int(rest[2])
-            if t in accounts: accounts[t]["rank"]=val
-            return
-        if cmd == "/rename" and len(rest)>=2:
-            t=rest[0].lstrip("@"); new=rest[1]
-            for s,k in list(users.items()):
-                if k==t: users[s]=new
-            return
-        if cmd == "/game" and rest and rest[0]=="block":
-            blocked.add(rest[1].lstrip("@"))
-            return
-        if cmd == "/password" and rest and rest[0]=="check":
-            t=rest[1].lstrip("@")
-            pw=accounts.get(t,{}).get("password")
-            if pw: reply(f"System: {t}'s password is {pw}")
-            return
-        if cmd == "/admin" and rest:
-            t=rest[0].lstrip("@")
-            if t in accounts:
-                accounts[t]["admin"]=True; admins.add(t)
-            return
+        score = user_ranks.get(username, {}).get("scores", {})
+        emit("message", {"msg": f"System: Rank: {user_ranks[username]['rank']}, Games: {score}"})
 
-    if msg.startswith("@") and "/challenge" in msg:
-        parts=msg.split()
-        target=parts[0][1:]; game=parts[-1]
-        tsid=next((s for s,k in users.items() if k==target),None)
-        if tsid and target not in blocked:
-            challenges[(sid,tsid)]=game
-            emit("message", {"msg":f"System: {u} challenged {target} to {game}. Type '/accept' or '/decline'."}, room=tsid)
-        return
+    elif cmd == "admin" and is_admin:
+        if len(args) >= 2:
+            target = args[1].lstrip("@")
+            sid2 = find_sid_by_username(target)
+            if sid2 and target in user_ranks:
+                users[sid2]["admin"] = True
+                user_ranks[target]["admin"] = True
+                emit("message", {"msg": f"System: {target} is now admin."}, room=sid)
 
-    if msg == "/accept":
-        match=[(c,t,g) for (c,t),g in challenges.items() if t==sid]
-        if not match: return
-        c,t,g=match[0]
-        rid=gen_room()
-        for p in (c,t):
-            leave_room(user_rooms[p],sid=p)
-            user_rooms[p]=rid
-            join_room(rid,sid=p)
-        game_rooms[rid]={"type":g,"players":[c,t],"data":{}}
-        rooms[rid]={c,t}
-        emit("message",{"msg":f"System: Started game: {g}"},room=rid)
-        if g=="roulette":
-            game_rooms[rid]["data"]={"bullet":random.randint(1,6),"turn":0,"clicks":0}
-            emit("message",{"msg":"Type /pull"},room=rid)
-        elif g=="killspree":
-            game_rooms[rid]["data"]={c:3,t:3}
-            emit("message",{"msg":"Type /attack"},room=rid)
-        del challenges[(c,t)]
-        return
+    elif cmd == "kick" and is_admin:
+        sid2 = find_sid_by_username(args[1].lstrip("@"))
+        if sid2:
+            emit("message", {"msg": "System: You were kicked."}, room=sid2)
+            socketio.disconnect(sid2)
 
-    if msg == "/decline":
-        for pair in list(challenges):
-            if pair[1]==sid:
-                emit("message",{"msg":"System: Challenge declined."},room=pair[0])
-                del challenges[pair]
-                break
-        return
+    elif cmd == "mute" and is_admin:
+        sid2 = find_sid_by_username(args[1].lstrip("@"))
+        if sid2:
+            muted.add(sid2)
+            emit("message", {"msg": f"System: Muted {args[1]}."}, room=sid)
 
-    if msg == "/pull":
-        roomg=game_rooms.get(room)
-        if roomg and roomg["type"]=="roulette":
-            d=roomg["data"]; turn=d["turn"]; ps=roomg["players"]
-            if sid!=ps[turn%2]: return
-            d["clicks"]+=1
-            if d["clicks"]==d["bullet"]:
-                emit("message",{"msg":f"{u} got shot!"},room=room)
-                rankings[users[ps[(turn+1)%2]]]["roulette"]+=1
-                _end_game(room); return
-            else:
-                emit("message",{"msg":f"{u} survived."},room=room)
-                d["turn"]+=1
-        return
+    elif cmd == "rank" and len(args) >= 3 and is_admin:
+        action, target = args[1], args[2].lstrip("@")
+        if action == "reset":
+            user_ranks[target]["rank"] = 0
+        elif action == "set" and len(args) >= 4:
+            user_ranks[target]["rank"] = int(args[3])
+        emit("message", {"msg": f"System: Rank updated for {target}."}, room=sid)
 
-    if msg == "/attack":
-        roomg=game_rooms.get(room)
-        if roomg and roomg["type"]=="killspree":
-            d=roomg["data"]; opp=next(p for p in roomg["players"] if p!=sid)
-            d[opp]-=1
-            emit("message",{"msg":f"{u} attacked. {users[opp]} HP: {d[opp]}."},room=room)
-            if d[opp]<=0:
-                emit("message",{"msg":f"{users[opp]} defeated!"},room=room)
-                rankings[u]["killspree"]+=1
-                _end_game(room)
-        return
+    else:
+        emit("message", {"msg": f"System: Unknown command '{cmd}'"}, room=sid)
 
-    emit("message",{"msg":f"{display_name(sid)}: {msg}"},room=room)
+def find_sid_by_username(username):
+    for sid, info in users.items():
+        if info["username"] == username:
+            return sid
+    return None
 
-def _end_game(r):
-    for s in rooms.get(r,()):
-        leave_room(r,sid=s); join_room("lobby",sid=s); user_rooms[s]="lobby"
-    rooms.pop(r,None); game_rooms.pop(r,None)
-
-if __name__=="__main__":
-    port=int(os.environ.get("PORT",4000))
-    socketio.run(app,host="0.0.0.0",port=port)
+if __name__ == "__main__":
+    socketio.run(app, debug=True, host="0.0.0.0", port=4000)
