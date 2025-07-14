@@ -1,58 +1,74 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Messenger10 Terminal</title>
-    <style>
-        body {
-            background-color: black;
-            color: lime;
-            font-family: monospace;
-            padding: 20px;
-        }
-        #terminal {
-            white-space: pre-wrap;
-            max-height: 80vh;
-            overflow-y: auto;
-        }
-        input {
-            background: black;
-            color: lime;
-            border: none;
-            border-bottom: 1px solid lime;
-            width: 100%;
-            font-family: monospace;
-            font-size: 1em;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Chat Terminal</title>
+  <style>
+    body {
+      background-color: #1a1a1a;
+      color: #ff4d4d;
+      font-family: monospace;
+      padding: 0;
+      margin: 0;
+    }
+    #terminal {
+      height: 90vh;
+      overflow-y: scroll;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+    #inputBox {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      background: #000;
+      color: #ff4d4d;
+      font-size: 16px;
+      font-family: monospace;
+      box-sizing: border-box;
+    }
+  </style>
 </head>
 <body>
-    <h2>Messenger10 Terminal</h2>
-    <div id="terminal">Type "help" to begin.</div>
-    <input type="text" id="commandInput" autocomplete="off" autofocus placeholder="Enter command...">
+  <div id="terminal"></div>
+  <input type="text" id="inputBox" placeholder="Type a message..." autofocus>
 
-    <script>
-        const terminal = document.getElementById("terminal");
-        const input = document.getElementById("commandInput");
+  <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+    const terminal = document.getElementById("terminal");
+    const inputBox = document.getElementById("inputBox");
 
-        input.addEventListener("keydown", function (event) {
-            if (event.key === "Enter") {
-                const command = input.value;
-                input.value = "";
-                fetch("/terminal", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ command })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    terminal.innerText += "\n\n" + data.response;
-                    terminal.scrollTop = terminal.scrollHeight;
-                });
-            }
-        });
-    </script>
+    function print(msg) {
+      const div = document.createElement("div");
+      div.textContent = msg;
+      terminal.appendChild(div);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    socket.on("connect", () => {
+      print("System: Connected. You are 'Anonymous'. Type /help for commands.");
+    });
+
+    socket.on("message", data => {
+      print(data.msg);
+    });
+
+    inputBox.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        const msg = inputBox.value.trim();
+        if (msg) {
+          socket.emit("chat", { msg });
+        }
+        inputBox.value = "";
+      }
+    });
+
+    // Ask for username on first load
+    setTimeout(() => {
+      const uname = prompt("Enter username:");
+      if (uname) socket.emit("set_username", { username: uname });
+    }, 500);
+  </script>
 </body>
 </html>
